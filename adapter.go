@@ -17,7 +17,6 @@ package adapter
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/casbin/casbin/model"
@@ -147,14 +146,16 @@ func (a *Adapter) LoadPolicy(model model.Model) error {
 	return err
 }
 
-func (a *Adapter) writeTableLine(stm *sql.Stmt, ptype string, rule []string) string {
-	params := make([]string, 7)
+func (a *Adapter) writeTableLine(stm *sql.Stmt, ptype string, rule []string) error {
+	params := make([]interface{}, 7)
 	params = append(params, ptype)
 	for i, v := range rule {
-		params[i+1] = v
+		params[i] = v
 	}
-
-	return fmt.Sprintf("( %s )", strings.Join(params, ","))
+	if _, err := stm.Exec(params...); err != nil {
+		return err
+	}
+	return nil
 }
 
 // SavePolicy saves policy to database.
@@ -165,30 +166,28 @@ func (a *Adapter) SavePolicy(model model.Model) error {
 	a.dropTable()
 	a.createTable()
 
-	var values []string
+	stm, err := a.db.Prepare("insert into policy values($1, $2, $3, $4, $5, $6, $7)")
+	if err != nil {
+		return err
+	}
+	defer stm.Close()
 
 	for ptype, ast := range model["p"] {
 		for _, rule := range ast.Policy {
-			line := a.writeTableLine(stm, ptype, rule)
-			values = append(values, line)
+			if err = a.writeTableLine(stm, ptype, rule); err != nil {
+				return err
+			}
 		}
 	}
 
 	for ptype, ast := range model["g"] {
 		for _, rule := range ast.Policy {
-			line := a.writeTableLine(stm, ptype, rule)
-			values = append(values, line)
+			if err = a.writeTableLine(stm, ptype, rule); err != nil {
+				return err
+			}
 		}
 	}
-
-	if len(values) == 0 {
-		return errors.New("policy is empty.")
-	}
-
-	stmt := fmt.Sprintf(" INSERT INTO policy VALUES %s ;", strings.Join(values, ","))
-	_, err := a.db.Exec(stmt, nil)
-
-	return err
+	return nil
 }
 
 func (a *Adapter) AddPolicy(sec string, ptype string, policy []string) error {
